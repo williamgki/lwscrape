@@ -85,6 +85,10 @@ class MultiSourceCorpusBuilder:
                 citing_works TEXT,
                 is_open_access BOOLEAN,
                 relevance_score REAL,
+                raw_metadata TEXT,
+                etag TEXT,
+                last_modified TEXT,
+                retrieved_at TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(openalex_id),
                 UNIQUE(arxiv_id),
@@ -107,7 +111,7 @@ class MultiSourceCorpusBuilder:
         conn.commit()
         conn.close()
         logger.info(f"📁 Database initialized: {self.manifest_db}")
-        
+
     def rate_limit(self, service: str):
         """Apply rate limiting for API calls"""
         if service in self.last_request_time:
@@ -156,11 +160,25 @@ class MultiSourceCorpusBuilder:
         
         return min(score, 1.0)  # Cap at 1.0
 
+    def get_cached_headers(self, id_field: str, identifier: str) -> Dict[str, str]:
+        """Retrieve cached ETag and Last-Modified headers for a record"""
+        conn = sqlite3.connect(self.manifest_db)
+        cur = conn.cursor()
+        try:
+            cur.execute(f"SELECT etag, last_modified FROM papers WHERE {id_field} = ?", (identifier,))
+            row = cur.fetchone()
+        finally:
+            conn.close()
+
+        if row:
+            return {'etag': row[0], 'last_modified': row[1]}
+        return {}
+
 class OpenAlexConnector:
     def __init__(self, parent: MultiSourceCorpusBuilder):
         self.parent = parent
         self.base_url = "https://api.openalex.org/works"
-        
+
     def fetch_alignment_papers(self, per_page: int = 200, max_pages: int = 10) -> List[Dict]:
         """Fetch alignment papers from OpenAlex as the primary spine"""
         papers = []
@@ -197,11 +215,14 @@ class OpenAlexConnector:
                         break
                         
                     for work in data['results']:
-                        paper = self.parse_openalex_work(work)
+                        paper = self.fetch_work(work.get('id'))
                         if paper and paper.get('relevance_score', 0) > 0.1:  # Filter by relevance
                             papers.append(paper)
-                            
-                    logger.info(f"📄 Page {page}: {len(data['results'])} papers, {len([p for p in data['results'] if self.parse_openalex_work(p) and self.parse_openalex_work(p).get('relevance_score', 0) > 0.1])} relevant")
+
+                    logger.info(
+                        f"📄 Page {page}: {len(data['results'])} papers, "
+                        f"{len([w for w in data['results'] if self.parse_openalex_work(w) and self.parse_openalex_work(w).get('relevance_score', 0) > 0.1])} relevant"
+                    )
                     
                 except Exception as e:
                     logger.error(f"OpenAlex API error: {e}")
@@ -209,6 +230,34 @@ class OpenAlexConnector:
                     
         logger.info(f"✅ OpenAlex: {len(papers)} alignment papers collected")
         return papers
+
+    def fetch_work(self, work_id: str) -> Optional[Dict]:
+        """Fetch a single OpenAlex work with caching headers"""
+        if not work_id:
+            return None
+        cached = self.parent.get_cached_headers('openalex_id', work_id)
+        headers = {}
+        if cached.get('etag'):
+            headers['If-None-Match'] = cached['etag']
+        if cached.get('last_modified'):
+            headers['If-Modified-Since'] = cached['last_modified']
+
+        self.parent.rate_limit('openalex')
+        url = f"{self.base_url}/{work_id.split('/')[-1]}" if '/' in work_id else f"{self.base_url}/{work_id}"
+        response = requests.get(url, headers=headers, timeout=30)
+        if response.status_code == 304:
+            logger.info(f"🔄 OpenAlex {work_id} not modified")
+            return None
+        response.raise_for_status()
+
+        data = response.json()
+        paper = self.parse_openalex_work(data)
+        if paper:
+            paper['raw_metadata'] = json.dumps(data)
+        paper['etag'] = response.headers.get('ETag')
+        paper['last_modified'] = response.headers.get('Last-Modified')
+        paper['retrieved_at'] = datetime.utcnow().isoformat()
+        return paper
     
     def parse_openalex_work(self, work: Dict) -> Optional[Dict]:
         """Parse OpenAlex work into standardized format"""
@@ -263,8 +312,7 @@ class OpenAlexConnector:
                 'referenced_works': json.dumps(work.get('referenced_works', [])),
                 'citing_works': json.dumps([]),  # Will be populated later
                 'is_open_access': work.get('open_access', {}).get('is_oa', False),
-                'relevance_score': relevance_score,
-                'raw_metadata': json.dumps(work)
+                'relevance_score': relevance_score
             }
             
             return paper
@@ -306,19 +354,52 @@ class ArxivConnector:
                 response = requests.get(self.base_url, params=params, headers=headers, timeout=30)
                 response.raise_for_status()
                 feed = feedparser.parse(response.text)
-                
+
                 for entry in feed.entries:
-                    paper = self.parse_arxiv_entry(entry)
+                    arxiv_id = entry.id.split('/abs/')[-1]
+                    paper = self.fetch_entry(arxiv_id)
                     if paper and paper.get('relevance_score', 0) > 0.1:
                         papers.append(paper)
-                        
-                logger.info(f"📄 {category}: {len(feed.entries)} papers, {len([p for p in feed.entries if self.parse_arxiv_entry(p) and self.parse_arxiv_entry(p).get('relevance_score', 0) > 0.1])} relevant")
-                        
+
+                logger.info(
+                    f"📄 {category}: {len(feed.entries)} papers, "
+                    f"{len([e for e in feed.entries if self.parse_arxiv_entry(e) and self.parse_arxiv_entry(e).get('relevance_score', 0) > 0.1])} relevant"
+                )
+
             except Exception as e:
                 logger.error(f"arXiv API error for {category}: {e}")
                 
         logger.info(f"✅ arXiv: {len(papers)} alignment papers collected")
         return papers
+
+    def fetch_entry(self, arxiv_id: str) -> Optional[Dict]:
+        """Fetch a single arXiv entry with caching headers"""
+        cached = self.parent.get_cached_headers('arxiv_id', arxiv_id)
+        headers = {'User-Agent': 'multi-source-corpus-builder/1.0'}
+        if cached.get('etag'):
+            headers['If-None-Match'] = cached['etag']
+        if cached.get('last_modified'):
+            headers['If-Modified-Since'] = cached['last_modified']
+
+        params = {'id_list': arxiv_id}
+        self.parent.rate_limit('arxiv')
+        response = requests.get(self.base_url, params=params, headers=headers, timeout=30)
+        if response.status_code == 304:
+            logger.info(f"🔄 arXiv {arxiv_id} not modified")
+            return None
+        response.raise_for_status()
+
+        feed = feedparser.parse(response.text)
+        if not feed.entries:
+            return None
+        entry = feed.entries[0]
+        paper = self.parse_arxiv_entry(entry)
+        if paper:
+            paper['raw_metadata'] = json.dumps(dict(entry))
+        paper['etag'] = response.headers.get('ETag')
+        paper['last_modified'] = response.headers.get('Last-Modified')
+        paper['retrieved_at'] = datetime.utcnow().isoformat()
+        return paper
     
     def parse_arxiv_entry(self, entry) -> Optional[Dict]:
         """Parse arXiv entry into standardized format"""
@@ -359,8 +440,7 @@ class ArxivConnector:
                 'referenced_works': json.dumps([]),
                 'citing_works': json.dumps([]),
                 'is_open_access': True,  # arXiv papers are open access
-                'relevance_score': relevance_score,
-                'raw_metadata': json.dumps(dict(entry))
+                'relevance_score': relevance_score
             }
             
             return paper
@@ -400,22 +480,55 @@ class OpenReviewConnector:
                     )
                     
                     for note in notes:
-                        paper = self.parse_openreview_note(note, conf_name)
+                        paper = self.fetch_note(note.id, conf_name)
                         if paper and paper.get('relevance_score', 0) > 0.1:
                             papers.append(paper)
-                            
-                    logger.info(f"📄 {venue}: {len(notes)} papers, {len([p for p in notes if self.parse_openreview_note(p, conf_name) and self.parse_openreview_note(p, conf_name).get('relevance_score', 0) > 0.1])} relevant")
+
+                    logger.info(
+                        f"📄 {venue}: {len(notes)} papers, "
+                        f"{len([n for n in notes if self.parse_openreview_note(n.to_json(), conf_name) and self.parse_openreview_note(n.to_json(), conf_name).get('relevance_score', 0) > 0.1])} relevant"
+                    )
                     
                 except Exception as e:
                     logger.error(f"OpenReview API error for {venue}: {e}")
                     
         logger.info(f"✅ OpenReview: {len(papers)} alignment papers collected")
         return papers
+
+    def fetch_note(self, note_id: str, conf_name: str) -> Optional[Dict]:
+        """Fetch a single OpenReview note with caching headers"""
+        cached = self.parent.get_cached_headers('openreview_id', note_id)
+        headers = {}
+        if cached.get('etag'):
+            headers['If-None-Match'] = cached['etag']
+        if cached.get('last_modified'):
+            headers['If-Modified-Since'] = cached['last_modified']
+
+        params = {'id': note_id, 'details': 'all'}
+        self.parent.rate_limit('openreview')
+        response = requests.get('https://api.openreview.net/notes', params=params, headers=headers, timeout=30)
+        if response.status_code == 304:
+            logger.info(f"🔄 OpenReview {note_id} not modified")
+            return None
+        response.raise_for_status()
+
+        data = response.json()
+        notes = data.get('notes', [])
+        if not notes:
+            return None
+        note = notes[0]
+        paper = self.parse_openreview_note(note, conf_name)
+        if paper:
+            paper['raw_metadata'] = json.dumps(note)
+        paper['etag'] = response.headers.get('ETag')
+        paper['last_modified'] = response.headers.get('Last-Modified')
+        paper['retrieved_at'] = datetime.utcnow().isoformat()
+        return paper
     
-    def parse_openreview_note(self, note, conf_name: str) -> Optional[Dict]:
+    def parse_openreview_note(self, note: Dict, conf_name: str) -> Optional[Dict]:
         """Parse OpenReview note into standardized format"""
         try:
-            content = note.content
+            content = note.get('content', {})
             
             title = content.get('title', '')
             abstract = content.get('abstract', '')
@@ -431,11 +544,11 @@ class OpenReviewConnector:
                 authors = [authors]
                 
             # Extract year from venue
-            year_match = re.search(r'(20\d{2})', note.content.get('venue', ''))
+            year_match = re.search(r'(20\d{2})', content.get('venue', ''))
             pub_year = int(year_match.group()) if year_match else None
             
             paper = {
-                'openreview_id': note.id,
+                'openreview_id': note.get('id'),
                 'title': title,
                 'doi': None,  # OpenReview doesn't typically have DOIs
                 'authors': '; '.join(authors[:5]) if authors else "",
@@ -446,14 +559,13 @@ class OpenReviewConnector:
                 'cited_by_count': 0,  # OpenReview doesn't provide citation counts
                 'concepts': json.dumps([]),
                 'keywords': content.get('keywords', []),
-                'pdf_url': f"https://openreview.net/pdf?id={note.id}",
+                'pdf_url': f"https://openreview.net/pdf?id={note.get('id')}",
                 'primary_source': 'openreview',
                 'sources': json.dumps(['openreview']),
                 'referenced_works': json.dumps([]),
                 'citing_works': json.dumps([]),
                 'is_open_access': True,  # OpenReview papers are typically open access
-                'relevance_score': relevance_score,
-                'raw_metadata': json.dumps(note.to_json())
+                'relevance_score': relevance_score
             }
             
             return paper
