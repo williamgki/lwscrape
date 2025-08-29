@@ -148,7 +148,12 @@ class CorpusDeduplicator:
         secondary_refs = json.loads(secondary.get('referenced_works', '[]'))
         combined_refs = list(set(primary_refs + secondary_refs))
         merged['referenced_works'] = json.dumps(combined_refs)
-        
+
+        # Preserve metadata headers
+        for field in ['raw_metadata', 'etag', 'last_modified', 'retrieved_at']:
+            if not merged.get(field) and secondary.get(field):
+                merged[field] = secondary[field]
+
         self.dedup_stats['merged_records'] += 1
         return merged
     
@@ -284,8 +289,9 @@ class CorpusDeduplicator:
                     openalex_id, arxiv_id, openreview_id, doi, title,
                     authors, publication_year, publication_date, venue, abstract,
                     cited_by_count, concepts, keywords, pdf_url, primary_source,
-                    sources, referenced_works, citing_works, is_open_access, relevance_score
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    sources, referenced_works, citing_works, is_open_access, relevance_score,
+                    raw_metadata, etag, last_modified, retrieved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 paper.get('openalex_id'),
                 paper.get('arxiv_id'),
@@ -306,8 +312,26 @@ class CorpusDeduplicator:
                 paper.get('referenced_works'),
                 paper.get('citing_works'),
                 paper.get('is_open_access', False),
-                paper.get('relevance_score', 0.0)
+                paper.get('relevance_score', 0.0),
+                paper.get('raw_metadata'),
+                paper.get('etag'),
+                paper.get('last_modified'),
+                paper.get('retrieved_at')
             ))
+
+            # Write raw metadata file
+            raw_dir = self.corpus_dir / 'raw_metadata'
+            raw_dir.mkdir(exist_ok=True)
+            if paper.get('paper_id'):
+                raw_file = raw_dir / f"{paper['paper_id']}.json"
+                meta_content = {
+                    'raw_metadata': json.loads(paper.get('raw_metadata', '{}')) if paper.get('raw_metadata') else None,
+                    'etag': paper.get('etag'),
+                    'last_modified': paper.get('last_modified'),
+                    'retrieved_at': paper.get('retrieved_at')
+                }
+                with open(raw_file, 'w') as rf:
+                    json.dump(meta_content, rf, indent=2)
         
         conn.commit()
         conn.close()
