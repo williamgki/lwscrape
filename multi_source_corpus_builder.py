@@ -22,13 +22,23 @@ import openreview
 from datasketch import MinHash, MinHashLSH
 import pandas as pd
 
+from directory_config import load_config
+
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+config = load_config()
+
+
 class MultiSourceCorpusBuilder:
-    def __init__(self, output_dir: str = "/home/ubuntu/LW_scrape/multi_source_corpus"):
+    def __init__(self, corpus_dir: str = str(config.corpus_dir),
+                 output_dir: str = str(config.output_dir),
+                 temp_dir: str = str(config.temp_dir)):
+        self.corpus_dir = Path(corpus_dir)
         self.output_dir = Path(output_dir)
+        self.temp_dir = Path(temp_dir)
+
         self.output_dir.mkdir(exist_ok=True)
         
         # Initialize databases
@@ -464,15 +474,17 @@ class OpenReviewConnector:
 
 def main():
     parser = argparse.ArgumentParser(description="Multi-source corpus builder for AI alignment papers")
-    parser.add_argument("--output-dir", default="/home/ubuntu/LW_scrape/multi_source_corpus")
+    parser.add_argument("--corpus-dir", default=str(config.corpus_dir))
+    parser.add_argument("--output-dir", default=str(config.output_dir))
+    parser.add_argument("--temp-dir", default=str(config.temp_dir))
     parser.add_argument("--openalex-pages", type=int, default=5, help="Max pages per OpenAlex query")
     parser.add_argument("--arxiv-results", type=int, default=1000, help="Max results from arXiv")
     parser.add_argument("--openreview-limit", type=int, default=200, help="Max papers per venue from OpenReview")
     parser.add_argument("--dry-run", action="store_true", help="Skip API calls, use cached data")
-    
+
     args = parser.parse_args()
-    
-    builder = MultiSourceCorpusBuilder(args.output_dir)
+
+    builder = MultiSourceCorpusBuilder(args.corpus_dir, args.output_dir, args.temp_dir)
     
     logger.info("🚀 Starting multi-source corpus building...")
     

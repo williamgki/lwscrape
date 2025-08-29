@@ -1,0 +1,5 @@
+{
+  "corpus_dir": "/home/ubuntu/LW_scrape/multi_source_corpus",
+  "output_dir": "/home/ubuntu/LW_scrape/scored_corpus",
+  "temp_dir": "/home/ubuntu/LW_scrape/tmp"
+}
