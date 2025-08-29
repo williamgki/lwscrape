@@ -14,17 +14,28 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import pandas as pd
 from datetime import datetime
+import argparse
+
+from directory_config import load_config
 
 # Import our existing Wilson Lin chunker
 import sys
-sys.path.append('/home/ubuntu/LW_scrape')
+sys.path.append(str(Path(__file__).resolve().parent))
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+config = load_config()
+
+
 class MultiSourceProcessor:
-    def __init__(self, corpus_dir: str = "/home/ubuntu/LW_scrape/multi_source_corpus"):
+    def __init__(self,
+                 corpus_dir: str = str(config.corpus_dir),
+                 output_dir: str = str(config.output_dir),
+                 temp_dir: str = str(config.temp_dir)):
         self.corpus_dir = Path(corpus_dir)
+        self.output_dir = Path(output_dir)
+        self.temp_dir = Path(temp_dir)
         self.manifest_db = self.corpus_dir / "multi_source_manifest.db"
         
         # Output directories
@@ -276,9 +287,9 @@ class MultiSourceProcessor:
         new_chunks = pd.read_parquet(chunks_file)
         
         # Load existing scored corpus
-        existing_corpus_path = "/home/ubuntu/LW_scrape/scored_corpus/ai_relevance_scored_corpus.parquet"
-        
-        if Path(existing_corpus_path).exists():
+        existing_corpus_path = self.output_dir / "ai_relevance_scored_corpus.parquet"
+
+        if existing_corpus_path.exists():
             existing_corpus = pd.read_parquet(existing_corpus_path)
             
             # Combine corpora
@@ -307,13 +318,15 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Process multi-source papers through Wilson Lin chunking")
-    parser.add_argument("--corpus-dir", default="/home/ubuntu/LW_scrape/multi_source_corpus")
+    parser.add_argument("--corpus-dir", default=str(config.corpus_dir))
+    parser.add_argument("--output-dir", default=str(config.output_dir))
+    parser.add_argument("--temp-dir", default=str(config.temp_dir))
     parser.add_argument("--skip-download", action="store_true", help="Skip PDF download")
     parser.add_argument("--skip-chunking", action="store_true", help="Skip Wilson Lin chunking")
-    
+
     args = parser.parse_args()
-    
-    processor = MultiSourceProcessor(args.corpus_dir)
+
+    processor = MultiSourceProcessor(args.corpus_dir, args.output_dir, args.temp_dir)
     
     logger.info("🚀 Starting multi-source to Wilson Lin pipeline...")
     

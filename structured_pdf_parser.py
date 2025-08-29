@@ -355,9 +355,19 @@ class TEIParser:
         
         return '\n\n'.join(text_parts)
 
+from directory_config import load_config
+
+config = load_config()
+
+
 class StructuredPDFParser:
-    def __init__(self, corpus_dir: str = "/home/ubuntu/LW_scrape/multi_source_corpus"):
+    def __init__(self,
+                 corpus_dir: str = str(config.corpus_dir),
+                 output_dir: str = str(config.output_dir),
+                 temp_dir: str = str(config.temp_dir)):
         self.corpus_dir = Path(corpus_dir)
+        self.output_dir = Path(output_dir)
+        self.temp_dir = Path(temp_dir)
         
         # Setup directories
         self.pdf_dir = self.corpus_dir / "downloaded_papers"
@@ -375,7 +385,7 @@ class StructuredPDFParser:
         
         # Find pdffigures2 jar
         jar_paths = [
-            "/home/ubuntu/pdffigures2/target/scala-2.12/pdffigures2-assembly.jar",
+            str(Path.home() / "pdffigures2/target/scala-2.12/pdffigures2-assembly.jar"),
             "./pdffigures2/target/scala-2.12/pdffigures2-assembly.jar",
             "/usr/local/bin/pdffigures2-assembly.jar"
         ]
@@ -661,14 +671,16 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Structured PDF parsing with GROBID and pdffigures2")
-    parser.add_argument("--corpus-dir", default="/home/ubuntu/LW_scrape/multi_source_corpus")
+    parser.add_argument("--corpus-dir", default=str(config.corpus_dir))
+    parser.add_argument("--output-dir", default=str(config.output_dir))
+    parser.add_argument("--temp-dir", default=str(config.temp_dir))
     parser.add_argument("--setup-services", action="store_true", help="Setup GROBID and pdffigures2")
     parser.add_argument("--skip-grobid", action="store_true", help="Skip GROBID processing")
     parser.add_argument("--skip-pdffigures2", action="store_true", help="Skip pdffigures2 processing")
-    
+
     args = parser.parse_args()
-    
-    parser = StructuredPDFParser(args.corpus_dir)
+
+    parser = StructuredPDFParser(args.corpus_dir, args.output_dir, args.temp_dir)
     
     # Setup services if requested
     if args.setup_services:
