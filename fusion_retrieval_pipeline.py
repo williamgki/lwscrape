@@ -10,9 +10,12 @@ import numpy as np
 from collections import defaultdict
 import time
 
+from pyserini.search import SimpleSearcher
+
 from colbert_indexer import ColBERTLateInteractionIndexer
 from bge_cross_encoder_reranker import BGECrossEncoderReranker
 from production_chunking_config import ProductionChunk
+from splade_retriever import SPLADERetriever
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -51,36 +54,29 @@ class FusedResult:
     retrieval_stage: str = "fusion"
 
 
-class SPLADERetriever:
-    """SPLADE sparse retrieval implementation"""
-    
-    def __init__(self, model_name: str = "naver/splade-cocondenser-ensembledistil"):
-        self.model_name = model_name
-        # This would be implemented with actual SPLADE model
-        # For now, placeholder that uses BM25-like scoring
-        logger.info(f"SPLADE retriever initialized: {model_name}")
-    
-    def search(self, query: str, k: int = 400) -> List[Dict]:
-        """SPLADE sparse retrieval (placeholder implementation)"""
-        # In production, this would use actual SPLADE model
-        # For now, return placeholder results
-        logger.info(f"SPLADE search for: '{query[:50]}...' (k={k})")
-        return []
-
-
 class ProductionFusionPipeline:
     """Complete fusion pipeline: ColBERT + BM25 + SPLADE → RRF → BGE reranker"""
     
     def __init__(self,
                  colbert_index_name: str = "production_papers",
                  chunks_storage_path: str = "./production_chunks",
-                 bge_model: str = "BAAI/bge-reranker-v2-m3"):
-        
+                 bge_model: str = "BAAI/bge-reranker-v2-m3",
+                 bm25_index_path: str = "./docunits_text_index",
+                 splade_index_path: str = "./splade_index"):
+
         # Initialize retrievers
         self.colbert_retriever = ColBERTLateInteractionIndexer(
             index_name=colbert_index_name
         )
-        self.splade_retriever = SPLADERetriever()
+
+        try:
+            self.bm25_searcher = SimpleSearcher(bm25_index_path)
+            logger.info(f"BM25 searcher loaded from {bm25_index_path}")
+        except Exception as e:
+            self.bm25_searcher = None
+            logger.warning(f"BM25 searcher unavailable: {e}")
+
+        self.splade_retriever = SPLADERetriever(index_dir=splade_index_path)
         self.bge_reranker = BGECrossEncoderReranker(model_name=bge_model)
         
         # Storage
@@ -135,32 +131,28 @@ class ProductionFusionPipeline:
         return metadata
     
     def bm25_search(self, query: str, k: int = 400) -> List[Dict]:
-        """BM25 search using precomputed terms"""
-        results = []
-        
-        query_terms = query.lower().split()
-        
-        for chunk_id, chunk in self.chunk_metadata.items():
-            if not chunk.bm25_terms:
-                continue
-            
-            # Simple BM25-like scoring
-            score = 0.0
-            for term in query_terms:
-                if term in chunk.bm25_terms:
-                    score += chunk.bm25_terms[term]
-            
-            if score > 0:
-                results.append({
-                    'chunk_id': chunk_id,
-                    'score': score,
-                    'method': 'bm25'
-                })
-        
-        # Sort by score and return top-k
-        results.sort(key=lambda x: x['score'], reverse=True)
-        logger.info(f"BM25 search returned {len(results[:k])} results")
-        return results[:k]
+        """BM25 search using Pyserini SimpleSearcher"""
+        if not self.bm25_searcher:
+            logger.warning("BM25 searcher not initialized")
+            return []
+
+        try:
+            hits = self.bm25_searcher.search(query, k)
+        except Exception as e:
+            logger.warning(f"BM25 search failed: {e}")
+            return []
+
+        results: List[Dict[str, Any]] = []
+        for rank, hit in enumerate(hits, start=1):
+            results.append({
+                'chunk_id': hit.docid,
+                'score': hit.score,
+                'method': 'bm25',
+                'rank': rank
+            })
+
+        logger.info(f"BM25 search returned {len(results)} results")
+        return results
     
     def splade_search(self, query: str, k: int = 400) -> List[Dict]:
         """SPLADE search using sparse representations"""
@@ -175,9 +167,9 @@ class ProductionFusionPipeline:
         """Apply RRF fusion to combine multiple retrieval methods"""
         
         # Create rank mappings
-        colbert_ranks = {r['chunk_id']: i+1 for i, r in enumerate(colbert_results)}
-        bm25_ranks = {r['chunk_id']: i+1 for i, r in enumerate(bm25_results)}
-        splade_ranks = {r['chunk_id']: i+1 for i, r in enumerate(splade_results)}
+        colbert_ranks = {r['chunk_id']: r.get('rank', i + 1) for i, r in enumerate(colbert_results)}
+        bm25_ranks = {r['chunk_id']: r.get('rank', i + 1) for i, r in enumerate(bm25_results)}
+        splade_ranks = {r['chunk_id']: r.get('rank', i + 1) for i, r in enumerate(splade_results)}
         
         # Collect all unique chunk IDs
         all_chunk_ids = set()
