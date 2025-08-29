@@ -10,6 +10,8 @@ from pathlib import Path
 import subprocess
 import sys
 from datetime import datetime
+import asyncio
+from typing import List, Optional
 
 # Add local modules to path
 sys.path.append('/home/ubuntu/LW_scrape')
@@ -41,7 +43,9 @@ class CompleteCorpusPipeline:
             'references_extracted': 0,
             'references_normalized': 0,
             'chunks_created': 0,
-            'citations_mapped': 0
+            'citations_mapped': 0,
+            'low_evidence_papers': 0,
+            'low_info_survey_nodes': 0
         }
     
     def run_paper_collection(self, openalex_pages: int = 10, arxiv_results: int = 2000, openreview_limit: int = 500) -> str:
@@ -267,6 +271,99 @@ class CompleteCorpusPipeline:
         except Exception as e:
             logger.warning(f"⚠️ AI relevance scoring error: {e}")
             return chunks_file
+
+    def run_evidence_density_checks(self,
+                                    threshold: float = 1.0,
+                                    extractions_dir: str = ""):
+        """Check evidence density of typed extractions"""
+
+        logger.info("🚀 Running evidence density checks")
+
+        from typed_paper_extractor import TypedPaperExtraction
+
+        if not extractions_dir:
+            extractions_dir = self.corpus_dir / 'typed_extractions' / 'validated'
+
+        extraction_path = Path(extractions_dir)
+        if not extraction_path.exists():
+            logger.info("No typed extractions found; skipping evidence density check")
+            return
+
+        low_count = 0
+        total = 0
+        for json_file in extraction_path.glob('*.json'):
+            total += 1
+            try:
+                with open(json_file, 'r') as f:
+                    data = json.load(f)
+                extraction = TypedPaperExtraction.parse_obj(data)
+            except Exception as e:
+                logger.warning(f"Failed to parse extraction {json_file}: {e}")
+                continue
+
+            num_claims = len(extraction.claims)
+            valid_quotes = sum(len(c.evidence_spans) for c in extraction.claims)
+            density = valid_quotes / num_claims if num_claims else 0.0
+
+            if density < threshold:
+                logger.warning(
+                    f"Evidence density {density:.2f} below threshold for {extraction.paper_id}")
+                low_count += 1
+
+        self.pipeline_stats['low_evidence_papers'] = low_count
+        logger.info(
+            f"Evidence density check complete: {low_count} papers below threshold {threshold}")
+
+    def run_citation_graph_checks(self,
+                                  target_paper_ids: Optional[List[str]] = None,
+                                  min_refs: int = 5):
+        """Build citation graphs and mark low-info survey/tutorial nodes"""
+
+        logger.info("🚀 Running citation graph checks")
+
+        from citation_graph_builder import CitationGraphBuilder
+
+        if target_paper_ids is None:
+            target_paper_ids = []
+            dedup_file = self.corpus_dir / 'deduplicated_papers.json'
+            if dedup_file.exists():
+                try:
+                    with open(dedup_file, 'r') as f:
+                        papers = json.load(f)
+                    for paper in papers:
+                        openalex_id = paper.get('openalex_id')
+                        if openalex_id:
+                            target_paper_ids.append(openalex_id)
+                        if len(target_paper_ids) >= 1:
+                            break
+                except Exception as e:
+                    logger.warning(f"Failed to load deduplicated papers: {e}")
+
+        if not target_paper_ids:
+            logger.info("No target papers available for citation graph check")
+            return
+
+        builder = CitationGraphBuilder()
+        low_total = 0
+        for pid in target_paper_ids:
+            try:
+                graph = asyncio.run(
+                    builder.build_ego_graph(
+                        pid,
+                        hops=1,
+                        include_citations=False,
+                        include_references=True,
+                        min_survey_refs=min_refs,
+                    )
+                )
+                low_nodes = [n for n, d in graph.nodes(data=True) if d.get('low_info')]
+                low_total += len(low_nodes)
+            except Exception as e:
+                logger.warning(f"Citation graph build failed for {pid}: {e}")
+
+        self.pipeline_stats['low_info_survey_nodes'] = low_total
+        logger.info(
+            f"Citation graph check complete: {low_total} low-info survey/tutorial nodes found")
     
     def run_columnar_storage(self, chunks_file: str, references_file: str = "") -> bool:
         """Step 8: Store in columnar format with DuckDB"""
@@ -364,7 +461,11 @@ class CompleteCorpusPipeline:
             
             # Step 7: AI relevance scoring (optional)
             scored_chunks = self.run_ai_relevance_scoring(chunks_file)
-            
+
+            # Quality checks
+            self.run_evidence_density_checks()
+            self.run_citation_graph_checks()
+
             # Step 8: Columnar storage
             success = self.run_columnar_storage(scored_chunks, references_file)
             
@@ -378,6 +479,8 @@ class CompleteCorpusPipeline:
                 logger.info(f"🔗 References normalized: {self.pipeline_stats['references_normalized']}")
                 logger.info(f"📝 Chunks created: {self.pipeline_stats['chunks_created']}")
                 logger.info(f"🔗 Citations mapped: {self.pipeline_stats['citations_mapped']}")
+                logger.info(f"📉 Low evidence papers: {self.pipeline_stats['low_evidence_papers']}")
+                logger.info(f"📚 Low-info survey nodes: {self.pipeline_stats['low_info_survey_nodes']}")
                 logger.info(f"💾 Output directory: {self.final_output_dir}")
                 logger.info("="*60)
                 return True

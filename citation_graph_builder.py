@@ -288,11 +288,12 @@ class CitationGraphBuilder:
             'processing_time': 0.0
         }
     
-    async def build_ego_graph(self, 
+    async def build_ego_graph(self,
                             target_paper_id: str,
                             hops: int = 2,
                             include_citations: bool = True,
-                            include_references: bool = True) -> nx.DiGraph:
+                            include_references: bool = True,
+                            min_survey_refs: int = 5) -> nx.DiGraph:
         """Build citation ego-graph around target paper"""
         
         logger.info(f"Building {hops}-hop ego-graph for {target_paper_id}")
@@ -381,6 +382,11 @@ class CitationGraphBuilder:
             # Store final API stats
             logger.info(f"OpenAlex API stats: {expander.stats}")
         
+        # Mark survey/tutorial nodes with too few references
+        low_info_nodes = self._check_survey_outgoing_refs(graph, min_survey_refs)
+        if low_info_nodes:
+            logger.warning(f"Found {len(low_info_nodes)} low-info survey/tutorial nodes")
+
         # Store graph
         self.graphs[target_paper_id] = graph
         
@@ -392,6 +398,21 @@ class CitationGraphBuilder:
         
         logger.info(f"Built ego-graph: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges")
         return graph
+
+    def _check_survey_outgoing_refs(self, graph: nx.DiGraph, min_refs: int) -> List[str]:
+        """Mark survey/tutorial nodes with insufficient outgoing references"""
+
+        low_info = []
+        for node_id, data in graph.nodes(data=True):
+            title = data.get('title', '').lower()
+            if 'survey' in title or 'tutorial' in title:
+                out_refs = graph.out_degree(node_id)
+                if out_refs < min_refs:
+                    graph.nodes[node_id]['low_info'] = True
+                    low_info.append(node_id)
+                else:
+                    graph.nodes[node_id]['low_info'] = False
+        return low_info
     
     def _calculate_year_gap(self, cite_year: Optional[int], ref_year: Optional[int]) -> Optional[int]:
         """Calculate year gap between citing and referenced paper"""

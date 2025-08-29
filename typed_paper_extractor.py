@@ -491,27 +491,29 @@ class ExtractionValidator:
         item.status = "VALID"
         return True
     
-    def _validate_evidence_span(self, span: EvidenceSpan) -> bool:
+    def _validate_evidence_span(self, span: EvidenceSpan, log: bool = True) -> bool:
         """Validate evidence span"""
-        
+
         # Check page exists
         if span.page not in self.page_contents:
-            logger.warning(f"Evidence span references non-existent page: {span.page}")
+            if log:
+                logger.warning(f"Evidence span references non-existent page: {span.page}")
             return False
-        
+
         # Check quote is not empty
         if not span.quote.strip():
-            logger.warning("Evidence span has empty quote")
+            if log:
+                logger.warning("Evidence span has empty quote")
             return False
-        
+
         # Check quote exists in page content (fuzzy match)
         page_content = self.page_contents[span.page].lower()
         quote_lower = span.quote.lower().strip()
-        
+
         # Try exact match first
         if quote_lower in page_content:
             return True
-        
+
         # Try partial match (allow for OCR differences)
         words = quote_lower.split()
         if len(words) >= 3:
@@ -519,9 +521,39 @@ class ExtractionValidator:
             word_matches = sum(1 for word in words if word in page_content)
             if word_matches / len(words) >= 0.7:
                 return True
-        
-        logger.warning(f"Quote not found in page {span.page}: '{span.quote[:50]}...'")
+
+        if log:
+            logger.warning(f"Quote not found in page {span.page}: '{span.quote[:50]}...'")
         return False
+
+    def compute_evidence_density(self, extraction: TypedPaperExtraction) -> float:
+        """Compute (#valid quotes)/(#claims) for a paper"""
+
+        num_claims = len(extraction.claims)
+        if num_claims == 0:
+            return 0.0
+
+        valid_quotes = 0
+        for claim in extraction.claims:
+            for span in claim.evidence_spans:
+                if self._validate_evidence_span(span, log=False):
+                    valid_quotes += 1
+
+        return valid_quotes / num_claims
+
+    def check_evidence_density(self,
+                               extraction: TypedPaperExtraction,
+                               threshold: float) -> float:
+        """Log evidence density and warn if below threshold"""
+
+        density = self.compute_evidence_density(extraction)
+        if density < threshold:
+            logger.warning(
+                f"Evidence density {density:.2f} below threshold {threshold}")
+        else:
+            logger.info(
+                f"Evidence density {density:.2f} meets threshold {threshold}")
+        return density
 
 
 def main():
