@@ -1,0 +1,203 @@
+{
+  "openalex": {
+    "base_url": "https://api.openalex.org",
+    "search_queries": {
+      "broad_alignment": "/works?search=alignment%20OR%20interpretability%20OR%20\"reward%20modeling\"&per_page=200",
+      "deceptive_alignment": "/works?filter=from_publication_date:2016-01-01,to_publication_date:2025-12-31&search=\"deceptive%20alignment\"",
+      "ai_safety_concepts": "/works?search=\"AI%20safety\"%20OR%20\"artificial%20intelligence%20safety\"%20OR%20\"AI%20alignment\"&per_page=200",
+      "interpretability": "/works?search=interpretability%20OR%20explainability%20OR%20\"mechanistic%20interpretability\"&per_page=200",
+      "rlhf_concepts": "/works?search=RLHF%20OR%20\"reinforcement%20learning%20human%20feedback\"%20OR%20\"reward%20modeling\"&per_page=200"
+    },
+    "select_fields": "&select=id,title,doi,abstract_inverted_index,primary_location,open_access,referenced_works,authorships,publication_year,cited_by_count,concepts",
+    "date_filters": {
+      "recent": "&filter=from_publication_date:2020-01-01,to_publication_date:2025-12-31",
+      "modern_era": "&filter=from_publication_date:2016-01-01,to_publication_date:2025-12-31",
+      "comprehensive": "&filter=from_publication_date:2010-01-01,to_publication_date:2025-12-31"
+    },
+    "rate_limit_delay": 0.1,
+    "max_retries": 3,
+    "per_page": 200
+  },
+  "arxiv": {
+    "search_query": "(cs.AI OR cs.LG) AND (alignment OR interpretability OR \"reward modeling\" OR RLHF OR RLAIF OR ELK OR debate)",
+    "max_results": 5000,
+    "sort_by": "arxiv.SortCriterion.SubmittedDate",
+    "batch_size": 100,
+    "search_template": "\nimport arxiv\nsearch = arxiv.Search(\n    query='(cs.AI OR cs.LG) AND (alignment OR interpretability OR \"reward modeling\" OR RLHF OR RLAIF OR ELK OR debate)',\n    max_results=1000,\n    sort_by=arxiv.SortCriterion.SubmittedDate\n)\nfor result in search.results():\n    print(f\"Title: {result.title}\")\n    print(f\"arXiv ID: {result.entry_id}\")\n    print(f\"PDF URL: {result.pdf_url}\")\n    "
+  },
+  "openreview": {
+    "base_url": "https://api2.openreview.net",
+    "venues": [
+      "ICLR 2025",
+      "ICLR 2024",
+      "ICLR 2023",
+      "NeurIPS 2024",
+      "NeurIPS 2023",
+      "NeurIPS 2022",
+      "ICML 2024",
+      "ICML 2023",
+      "ICML 2022"
+    ],
+    "client_template": "\nimport openreview\nclient = openreview.api.OpenReviewClient(\n    baseurl='https://api2.openreview.net',\n    username=username,\n    password=password\n)\nrecs = client.get_notes(\n    content={'venue': 'ICLR 2025'}, \n    details='replies'\n)\n    ",
+    "search_keywords": [
+      "alignment",
+      "interpretability",
+      "reward modeling",
+      "RLHF",
+      "AI safety",
+      "mechanistic interpretability",
+      "oversight",
+      "deceptive alignment",
+      "ELK"
+    ]
+  },
+  "grobid": {
+    "docker_service": {
+      "image": "lfoppiano/grobid:0.8.0",
+      "port": "8070",
+      "start_command": "docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0"
+    },
+    "api_endpoints": {
+      "base_url": "http://localhost:8070/api",
+      "process_fulltext": "/processFulltextDocument",
+      "process_header": "/processHeaderDocument",
+      "process_citations": "/processCitations"
+    },
+    "processing_options": {
+      "consolidate_header": "1",
+      "consolidate_citations": "1",
+      "coordinates": "true",
+      "format": "tei"
+    },
+    "curl_example": "\ncurl -v --form input=@paper.pdf      --form consolidateHeader=1      --form consolidateCitations=1      --form coordinates=true      http://localhost:8070/api/processFulltextDocument\n    "
+  },
+  "pdffigures2": {
+    "installation": {
+      "repo": "https://github.com/allenai/pdffigures2",
+      "build_command": "sbt assembly",
+      "jar_location": "target/scala-*/pdffigures2-assembly-*.jar"
+    },
+    "cli_options": {
+      "basic": "java -jar pdffigures2-assembly.jar input.pdf",
+      "with_text": "java -jar pdffigures2-assembly.jar -g input.pdf",
+      "output_format": "java -jar pdffigures2-assembly.jar -m /output/dir -d /data/dir input.pdf"
+    },
+    "processing_flags": {
+      "-g": "adds section titles and text dump partitioned by headings",
+      "-m": "specifies output directory for figure images",
+      "-d": "specifies data directory for JSON metadata",
+      "-q": "quiet mode",
+      "-t": "specify timeout in seconds"
+    }
+  },
+  "parquet_duckdb": {
+    "write_parquet": "\n# Write from pandas/pyarrow\ndf.to_parquet('DocUnits/chunks.parquet')\n\n# Write from DuckDB\nCOPY table_name TO 'output.parquet' (FORMAT PARQUET);\n    ",
+    "read_queries": {
+      "basic_read": "SELECT * FROM read_parquet('DocUnits/*.parquet');",
+      "filtered_read": "SELECT * FROM read_parquet('DocUnits/*.parquet') WHERE paper_id LIKE '%alignment%';",
+      "aggregated": "SELECT paper_id, COUNT(*) as chunk_count FROM read_parquet('DocUnits/*.parquet') GROUP BY paper_id;",
+      "join_example": "\n        SELECT p.title, c.text \n        FROM read_parquet('papers.parquet') p \n        JOIN read_parquet('chunks.parquet') c ON p.paper_id = c.paper_id;\n        "
+    },
+    "performance_tips": [
+      "Filters push down automatically",
+      "Use columnar selection: SELECT specific_cols",
+      "Partition by paper_id for better query performance",
+      "Use ZSTD compression for better storage efficiency"
+    ]
+  },
+  "colbert_bge": {
+    "colbert_model": {
+      "name": "colbert-ir/colbertv2.0",
+      "hf_link": "https://huggingface.co/colbert-ir/colbertv2.0",
+      "paper": "https://aclanthology.org/2022.naacl-main.272/",
+      "usage": "\nfrom colbert import Indexer, Searcher\nfrom colbert.infra import Run, RunConfig, ColBERTConfig\n\nwith Run().context(RunConfig(nranks=1)):\n    indexer = Indexer(checkpoint=\"colbert-ir/colbertv2.0\")\n    indexer.index(name=\"academic_papers\", collection=\"chunks.tsv\")\n        "
+    },
+    "bge_reranker": {
+      "name": "BAAI/bge-reranker-v2-m3",
+      "hf_link": "https://huggingface.co/BAAI/bge-reranker-v2-m3",
+      "features": [
+        "long-input support (8192 tokens)",
+        "multilingual",
+        "strong on science text"
+      ],
+      "usage": "\nfrom sentence_transformers import CrossEncoder\nreranker = CrossEncoder(\"BAAI/bge-reranker-v2-m3\", max_length=8192)\nscores = reranker.predict([(query, doc) for doc in candidates])\n        "
+    }
+  },
+  "bm25_splade": {
+    "pyserini_bm25": {
+      "repo": "https://github.com/castorini/pyserini",
+      "docs": "https://pyserini.readthedocs.io/",
+      "installation": "pip install pyserini",
+      "usage": "\nfrom pyserini.search.lucene import LuceneSearcher\nsearcher = LuceneSearcher('path/to/index')\nhits = searcher.search('query', k=100)\n        "
+    },
+    "splade": {
+      "paper": "https://arxiv.org/abs/2109.10086",
+      "model": "naver/splade-cocondenser-ensembledistil",
+      "docs": "https://github.com/naver/splade",
+      "key_concept": "Sparse lexical retrieval with learned sparse representations"
+    }
+  },
+  "rank_fusion": {
+    "rrf_formula": "score = \u03a3 1/(k + rank_i) over systems",
+    "recommended_k": 60,
+    "reference": "https://cormack.uwaterloo.ca/",
+    "implementation": "\ndef reciprocal_rank_fusion(rankings_list, k=60):\n    \"\"\"Combine multiple rankings using RRF\"\"\"\n    scores = {}\n    for rankings in rankings_list:\n        for rank, item_id in enumerate(rankings, 1):\n            if item_id not in scores:\n                scores[item_id] = 0\n            scores[item_id] += 1.0 / (k + rank)\n    \n    return sorted(scores.items(), key=lambda x: x[1], reverse=True)\n    "
+  },
+  "quality_guardrails": {
+    "deduplication": {
+      "method": "SimHash/MinHash on title+abstract+intro",
+      "libraries": [
+        "simhash (PyPI)",
+        "datasketch for MinHash"
+      ],
+      "threshold": "Merge papers with >0.85 similarity",
+      "priority": "arXiv vs journal - prefer journal version"
+    },
+    "graph_sanity": {
+      "rule": "Guarantee at least N outgoing refs for survey/tutorial papers",
+      "threshold": "Survey papers must have >=20 references",
+      "action": "Mark as low-info if below threshold"
+    },
+    "evidence_density": {
+      "metric": "(#quotes with page anchors) / (#claims)",
+      "failing_threshold": "<0.8 for paper reviews",
+      "action": "Flag papers with poor evidence extraction"
+    },
+    "reproducibility": {
+      "requirement": "Save every API response in raw_metadata",
+      "include": [
+        "ETags",
+        "timestamps",
+        "API version",
+        "request parameters"
+      ],
+      "storage": "One JSON file per paper with all API responses"
+    },
+    "monitoring": {
+      "api_rate_limits": "Track requests/minute for each API",
+      "error_tracking": "Log all API failures with retry attempts",
+      "progress_metrics": "Papers processed, extraction success rate, validation pass rate",
+      "disk_usage": "Monitor PDF storage, Parquet files, index sizes"
+    }
+  },
+  "production_commands": {
+    "docker_services": {
+      "grobid": "docker run --rm -p 8070:8070 lfoppiano/grobid:0.8.0",
+      "duckdb": "docker run --rm -v $(pwd):/data duckdb/duckdb"
+    },
+    "build_commands": {
+      "pdffigures2": "cd pdffigures2 && sbt assembly",
+      "colbert_index": "python colbert_indexer.py --collection chunks.tsv --index-name production_papers",
+      "parquet_export": "python -c \"import duckdb; duckdb.execute('COPY docunits TO chunks.parquet (FORMAT PARQUET)')\""
+    },
+    "scrape_sequence": [
+      "1. python multi_source_corpus_builder.py --openalex-pages 50 --arxiv-results 5000",
+      "2. python structured_pdf_parser.py --batch-process --pdf-dir ./pdfs",
+      "3. python deterministic_paper_pipeline.py --batch-size 10",
+      "4. python typed_object_linking.py --evidence-search",
+      "5. python citation_graph_builder.py --build-ego-graphs",
+      "6. python production_chunking_config.py --chunk-all-papers",
+      "7. python fusion_retrieval_pipeline.py --build-indexes"
+    ]
+  }
+}

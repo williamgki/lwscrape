@@ -1,0 +1,68 @@
+# Large data files and outputs
+*.log
+*.tar.gz
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.venv
+ENV/
+env.bak/
+venv.bak/
+
+# Data directories
+chunked_corpus/
+normalized_corpus/
+corpus_splits/
+corpus_with_survey/
+embedding_parts/
+final_combined_corpus/
+gchildren/
+multi_source_corpus/
+pdffigures2/
+retrieval_indexes/
+scored_corpus/
+survey/
+survey_chunked/
+survey_normalized/
+test_chunked_corpus/
+unified_corpus/
+wilson_lin_chunks/
+wilson_lin_enhanced/
+data/
+arxiv_reprocessing/
+arxiv_reprocessing_enhanced/
+corpus_final_enhanced/
+
+# Large text files (exclude requirements)
+!requirements*.txt
+missed_pdfs_comprehensive.txt
+pdf_urls.txt
+priority_pdfs.txt
+*.txt
+
+# OS and IDE files
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+
+# Model files and indexes
+*.bin
+*.index
+*.faiss
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
