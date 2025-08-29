@@ -1,0 +1,23 @@
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <text>
+    <body>
+      <pb n="1"/>
+      <div type="section">
+        <p xml:id="p1" facs="#z1">Paragraph one first page.</p>
+        <p xml:id="p2">Paragraph two first page.</p>
+      </div>
+      <pb n="2"/>
+      <div type="section">
+        <p xml:id="p3" facs="#z2">Paragraph on second page.</p>
+      </div>
+    </body>
+    <facsimile>
+      <surface n="1">
+        <zone xml:id="z1"/>
+      </surface>
+      <surface n="2">
+        <zone xml:id="z2"/>
+      </surface>
+    </facsimile>
+  </text>
+</TEI>

@@ -96,35 +96,40 @@ class DocUnitsExtractor:
     def __init__(self):
         self.ns = {'tei': 'http://www.tei-c.org/ns/1.0'}
     
-    def extract_from_grobid_tei(self, tei_file: Path, paper_id: str, source_ids: SourceIds) -> List[DocUnit]:
+    def extract_from_grobid_tei(self, tei_file: Path, paper_id: str, source_ids: SourceIds,
+                                pdffigures2_textdump: Optional[Path] = None) -> List[DocUnit]:
         """Extract DocUnits from GROBID TEI XML"""
-        units = []
-        
+        units: List[DocUnit] = []
+
         try:
             tree = ET.parse(tei_file)
             root = tree.getroot()
-            
+
+            zone_page_map = self._build_zone_page_map(root)
+            pb_page_map = self._build_pb_page_map(root)
+            pdffig_pages = self._load_pdffigures2_text(pdffigures2_textdump) if pdffigures2_textdump else []
+
             # Extract text sections
             sections = root.findall('.//tei:div[@type]', self.ns)
-            
+
             for section in sections:
                 section_title = self._get_section_title(section)
                 section_id = section_title or "unknown"
-                
+
                 # Extract paragraphs from this section
                 paragraphs = section.findall('.//tei:p', self.ns)
-                
+
                 for i, para in enumerate(paragraphs):
                     text = self._extract_text_content(para)
                     if not text.strip():
                         continue
-                        
+
                     # Extract references from this paragraph
                     refs = self._extract_paragraph_refs(para)
-                    
-                    # Estimate page number (simplified - would need coordinates)
-                    page = self._estimate_page(para, i)
-                    
+
+                    # Estimate page number using coordinates/text
+                    page = self._estimate_page(para, text, i, zone_page_map, pb_page_map, pdffig_pages)
+
                     unit = DocUnit(
                         paper_id=paper_id,
                         source_ids=source_ids,
@@ -136,14 +141,14 @@ class DocUnitsExtractor:
                         refs=refs
                     )
                     units.append(unit)
-            
+
             # Extract bibliography references
             refs_units = self._extract_bibliography(root, paper_id, source_ids)
             units.extend(refs_units)
-            
+
         except Exception as e:
             print(f"Error processing TEI file {tei_file}: {e}")
-        
+
         return units
     
     def extract_from_pdffigures2(self, json_file: Path, paper_id: str, source_ids: SourceIds) -> List[DocUnit]:
@@ -216,11 +221,76 @@ class DocUnitsExtractor:
             if target:
                 refs.append(target)
         return refs
-    
-    def _estimate_page(self, para, index: int) -> int:
-        """Estimate page number (simplified implementation)"""
-        # In real implementation, would use coordinate information
-        return max(1, index // 20)  # Rough estimate of ~20 paragraphs per page
+
+    def _build_zone_page_map(self, root) -> Dict[str, int]:
+        """Map facsimile zone ids to page numbers"""
+        zone_page: Dict[str, int] = {}
+        facsimile = root.find('.//tei:facsimile', self.ns)
+        if facsimile is None:
+            return zone_page
+        for surface in facsimile.findall('.//tei:surface', self.ns):
+            n = surface.get('n')
+            try:
+                page_num = int(n) if n is not None else None
+            except ValueError:
+                page_num = None
+            if page_num is None:
+                continue
+            for zone in surface.findall('.//tei:zone', self.ns):
+                zone_id = zone.get('{http://www.w3.org/XML/1998/namespace}id')
+                if zone_id:
+                    zone_page[zone_id] = page_num
+        return zone_page
+
+    def _build_pb_page_map(self, root) -> Dict[int, int]:
+        """Map paragraph elements to page numbers using <pb> markers"""
+        pb_map: Dict[int, int] = {}
+        page = 1
+        for elem in root.iter():
+            tag = self._strip_ns(elem.tag)
+            if tag == 'pb':
+                n = elem.get('n')
+                if n and n.isdigit():
+                    page = int(n)
+                else:
+                    page += 1
+            elif tag == 'p':
+                pb_map[id(elem)] = page
+        return pb_map
+
+    def _load_pdffigures2_text(self, text_file: Path) -> List[str]:
+        """Load pdffigures2 text dump split by pages"""
+        pages: List[str] = []
+        try:
+            content = text_file.read_text(encoding='utf-8')
+            if '\f' in content:
+                pages = content.split('\f')
+            else:
+                pages = content.split('\n\n')
+        except Exception:
+            pass
+        return pages
+
+    def _strip_ns(self, tag: str) -> str:
+        return tag.split('}')[-1] if '}' in tag else tag
+
+    def _estimate_page(self, para, text: str, index: int,
+                       zone_page_map: Dict[str, int],
+                       pb_page_map: Dict[int, int],
+                       pdffig_pages: List[str]) -> int:
+        """Determine page number using TEI coordinates or pdffigures2 text"""
+        facs = para.get('facs')
+        if facs:
+            zone_id = facs.lstrip('#')
+            if zone_id in zone_page_map:
+                return zone_page_map[zone_id]
+        if id(para) in pb_page_map:
+            return pb_page_map[id(para)]
+        if pdffig_pages:
+            for i, page_text in enumerate(pdffig_pages, start=1):
+                if text and text in page_text:
+                    return i
+        return max(1, index // 20)
     
     def _extract_bibliography(self, root, paper_id: str, source_ids: SourceIds) -> List[DocUnit]:
         """Extract bibliography as separate DocUnits"""
