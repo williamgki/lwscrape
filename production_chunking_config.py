@@ -9,6 +9,8 @@ import json
 import logging
 from transformers import AutoTokenizer
 
+from splade_retriever import SPLADERetriever
+
 from docunits_model import DocUnit, SourceIds
 
 logging.basicConfig(level=logging.INFO)
@@ -45,17 +47,19 @@ class ProductionChunk:
 class ProductionChunker:
     """Production chunker with optimal settings for retrieval"""
     
-    def __init__(self, 
+    def __init__(self,
                  tokenizer_model: str = "colbert-ir/colbertv2.0",
                  chunk_tokens: int = CHUNK_TOKENS,
-                 stride_tokens: int = STRIDE):
-        
+                 stride_tokens: int = STRIDE,
+                 splade_retriever: Optional[SPLADERetriever] = None):
+
         self.chunk_tokens = chunk_tokens
         self.stride_tokens = stride_tokens
-        
+        self.splade_retriever = splade_retriever
+
         # Load tokenizer for accurate token counting
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_model)
-        
+
         # Figure citation patterns for caption attachment
         self.figure_patterns = [
             re.compile(r'\b(Fig(?:ure)?\.?\s*(\d+[a-z]?))', re.IGNORECASE),
@@ -266,7 +270,7 @@ class ProductionChunker:
         # Determine chunk type
         chunk_type = "mixed" if caption_text else "text"
         
-        return ProductionChunk(
+        chunk = ProductionChunk(
             chunk_id=str(uuid.uuid4()),
             paper_id=first_unit.paper_id,
             page_from=page_from,
@@ -280,6 +284,15 @@ class ProductionChunker:
             source_docunit_ids=source_ids,
             chunk_type=chunk_type
         )
+
+        # Optionally generate and cache SPLADE sparse vectors
+        if self.splade_retriever:
+            try:
+                self.splade_retriever.cache_chunk(chunk)
+            except Exception as e:
+                logger.warning(f"SPLADE encoding failed for chunk {chunk.chunk_id}: {e}")
+
+        return chunk
     
     def _calculate_stride_units(self, 
                                section_units: List[DocUnit], 
